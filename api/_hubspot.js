@@ -68,6 +68,30 @@ export function ownerLabel(owners, ownerId) {
   return name || o.email || `Owner ${ownerId}`
 }
 
+// ---------- Deal pipelines / stages ----------
+
+let cachedStageLabels = null
+
+// Maps a deal's raw `dealstage` property (an internal stage ID, not a
+// human label) to its pipeline + stage labels, by asking HubSpot's
+// Pipelines API. Cached for the life of the serverless instance.
+export async function getDealStageLabels() {
+  if (cachedStageLabels) return cachedStageLabels
+  const data = await hsFetch('/crm/v3/pipelines/deals')
+  const map = new Map()
+  for (const pipeline of data.results || []) {
+    for (const stage of pipeline.stages || []) {
+      map.set(stage.id, {
+        stageLabel: stage.label,
+        pipelineId: pipeline.id,
+        pipelineLabel: pipeline.label,
+      })
+    }
+  }
+  cachedStageLabels = map
+  return cachedStageLabels
+}
+
 // ---------- Active List membership ----------
 
 // v3 Lists API — works for both static and active (dynamic) lists; for an
