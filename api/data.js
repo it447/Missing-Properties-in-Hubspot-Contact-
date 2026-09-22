@@ -34,9 +34,11 @@ import {
 // Deals sitting in this stage (within this pipeline) are excluded from
 // "Unowned" — a deal that's reached Meeting Scheduled in the MRR
 // Placement pipeline isn't a data gap, even if it happens to have no
-// owner yet.
-const EXCLUDED_UNOWNED_PIPELINE_RE = /\bmrr placement\b/i
-const EXCLUDED_UNOWNED_STAGE_RE = /\bmeeting scheduled\b/i
+// owner yet. These are this portal's actual stage/pipeline IDs (confirmed
+// directly in HubSpot), not label text — safer than matching by name,
+// since a stage/pipeline can be renamed without changing its ID.
+const EXCLUDED_UNOWNED_STAGE_ID = '1162444910'
+const EXCLUDED_UNOWNED_PIPELINE_ID = '793577095'
 
 // Only contact properties per the confirmed scope — these are NOT deal
 // properties in this portal.
@@ -103,9 +105,9 @@ export default async function handler(req, res) {
       const dealOwnerId = deal ? (dp.hubspot_owner_id || null) : null
       const stageInfo = deal ? stageLabels.get(dp.dealstage) : null
       const inExcludedUnownedStage = Boolean(
-        stageInfo &&
-        EXCLUDED_UNOWNED_PIPELINE_RE.test(stageInfo.pipelineLabel || '') &&
-        EXCLUDED_UNOWNED_STAGE_RE.test(stageInfo.stageLabel || '')
+        deal &&
+        String(dp.dealstage) === EXCLUDED_UNOWNED_STAGE_ID &&
+        (stageInfo?.pipelineId ?? EXCLUDED_UNOWNED_PIPELINE_ID) === EXCLUDED_UNOWNED_PIPELINE_ID
       )
 
       return {
