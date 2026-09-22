@@ -16,6 +16,9 @@
 //          kind of data gap an AE should be able to see and fix). Excludes
 //          deals already at "Meeting Scheduled" in the "MRR Placement"
 //          pipeline — that's a known-fine state, not a gap to chase.
+//        - "byAE": missing-property contacts grouped by AE, excluding
+//          deals at "Meeting Scheduled" or "No Show" — not the AE's to
+//          chase while the deal is sitting in either of those stages.
 // TESTING MODE: getSession/login is bypassed below (see the block marked
 // "RE-ENABLE LOGIN HERE"). "Mine" is instead driven by an ?ownerId=
 // query param so you can test the My List / Unowned split by picking any
@@ -39,6 +42,13 @@ import {
 // since a stage/pipeline can be renamed without changing its ID.
 const EXCLUDED_UNOWNED_STAGE_ID = '1162444910'
 const EXCLUDED_UNOWNED_PIPELINE_ID = '793577095'
+
+// Deals sitting in either of these stages are excluded from "By AE" too —
+// a contact whose deal has reached Meeting Scheduled or No Show isn't
+// something an AE needs to chase missing properties for right now. This
+// is re-evaluated against live HubSpot data on every load, so a contact
+// reappears automatically once its deal moves to a different stage.
+const EXCLUDED_BY_AE_STAGE_IDS = new Set(['1162444910', '1162732907'])
 
 // Only contact properties per the confirmed scope — these are NOT deal
 // properties in this portal.
@@ -123,6 +133,7 @@ export default async function handler(req, res) {
           ? {
               dealId: deal.id,
               name: dp.dealname || `Deal ${deal.id}`,
+              stageId: dp.dealstage || null,
               stage: stageInfo?.stageLabel || dp.dealstage || null,
               pipeline: stageInfo?.pipelineLabel || null,
               hubspotUrl: dealUrl(deal.id),
@@ -166,6 +177,7 @@ export default async function handler(req, res) {
     const byAEMap = new Map()
     for (const r of cleanRecords) {
       if (r.missingContactProps.length === 0) continue
+      if (r.deal && EXCLUDED_BY_AE_STAGE_IDS.has(r.deal.stageId)) continue
       const ownerId = r.deal?.ownerId || r.contactOwnerId
       if (isBlank(ownerId)) continue
       const ownerName = (r.deal?.ownerId ? r.deal.ownerName : r.contactOwnerName) || `Owner ${ownerId}`
