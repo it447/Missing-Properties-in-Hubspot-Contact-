@@ -84,3 +84,30 @@ export function buildReminderMessage({
     `Deal URL: ${dealUrl || 'N/A'}`,
   ].join('\n')
 }
+
+// Builds the Slack mrkdwn text for the "Unowned" tab's deal-has-no-owner
+// case specifically — a primary deal exists but its owner field is blank.
+// Single flat message (no 1st/2nd/3rd tiers — there's one recipient, so
+// there's no one further to escalate to), tags only Elena.
+export function buildUnownedDealMessage({
+  elenaSlackId,
+  contactName,
+  contactUrl,
+  dealName,
+  dealUrl,
+}) {
+  const mentions = elenaSlackId ? `<@${elenaSlackId}>` : ''
+  const contactLine = `*Contact:* ${formatLink(contactUrl, contactName)}`
+  const dealLine = `*Deal:* ${formatLink(dealUrl, dealName)}`
+
+  return [
+    ':red_circle: *Deal Missing Owner*',
+    `Hey ${mentions} — this deal has no owner. Please make sure the Deal Owner property is filled in.`,
+    '',
+    contactLine,
+    dealLine,
+    '',
+    `Contact URL: ${contactUrl || 'N/A'}`,
+    `Deal URL: ${dealUrl || 'N/A'}`,
+  ].join('\n')
+}
