@@ -1,0 +1,292 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { LogOut, RefreshCw, AlertTriangle, CheckCircle2, Users, UserX } from 'lucide-react'
+import { T } from './theme.js'
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+
+const PROP_LABELS = {
+  mql: 'MQL',
+  sql: 'SQL',
+  sal: 'SAL',
+  initial_meeting_outcome: 'Initial Meeting Outcome',
+}
+
+// ---------- Sign-in screen ----------
+
+function SignInScreen({ onCredential, error }) {
+  const btnRef = useRef(null)
+
+  useEffect(() => {
+    if (!window.google || !GOOGLE_CLIENT_ID) return
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: (resp) => onCredential(resp.credential),
+    })
+    if (btnRef.current) {
+      window.google.accounts.id.renderButton(btnRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        text: 'signin_with',
+        shape: 'pill',
+      })
+    }
+  }, [onCredential])
+
+  return (
+    <div style={styles.centerScreen}>
+      <div style={styles.signInCard}>
+        <h1 style={styles.title}>AE Missing Properties</h1>
+        <p style={{ color: T.cloudDark, marginBottom: 24 }}>
+          Sign in with your Scale Army Google account to see your contacts.
+        </p>
+        <div ref={btnRef} />
+        {!GOOGLE_CLIENT_ID && (
+          <p style={{ color: T.criticalText, marginTop: 16, fontSize: 13 }}>
+            VITE_GOOGLE_CLIENT_ID is not set — the sign-in button can't render.
+          </p>
+        )}
+        {error && <p style={{ color: T.criticalText, marginTop: 16, fontSize: 13 }}>{error}</p>}
+      </div>
+    </div>
+  )
+}
+
+// ---------- Badges ----------
+
+function PropChip({ label }) {
+  return (
+    <span style={styles.chip}>
+      <AlertTriangle size={12} style={{ marginRight: 4 }} />
+      {label}
+    </span>
+  )
+}
+
+function ReasonChip({ label }) {
+  return (
+    <span style={{ ...styles.chip, background: T.warningBg, borderColor: T.warningBorder, color: T.warningText }}>
+      <UserX size={12} style={{ marginRight: 4 }} />
+      {label}
+    </span>
+  )
+}
+
+// ---------- Record row ----------
+
+function RecordCard({ record, showReasons }) {
+  const hasIssues = record.missingContactProps.length > 0 || (showReasons && record.reasons?.length > 0)
+  return (
+    <div style={styles.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>{record.name}</div>
+          {record.email && <div style={{ color: T.cloudMed, fontSize: 13 }}>{record.email}</div>}
+        </div>
+        {!hasIssues && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: T.green, fontSize: 12 }}>
+            <CheckCircle2 size={14} /> Complete
+          </span>
+        )}
+      </div>
+
+      <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {record.missingContactProps.map((key) => (
+          <PropChip key={key} label={`Missing ${PROP_LABELS[key] || key}`} />
+        ))}
+        {showReasons && record.reasons?.map((r) => <ReasonChip key={r} label={r} />)}
+      </div>
+
+      <div style={styles.dealRow}>
+        {record.deal ? (
+          <>
+            <span style={{ color: T.cloudDark }}>Deal:</span>{' '}
+            <span style={{ fontWeight: 500 }}>{record.deal.name}</span>
+            {record.deal.stage && <span style={{ color: T.cloudMed }}> · {record.deal.stage}</span>}
+            <span style={{ color: T.cloudMed }}> · Owner: {record.deal.ownerName || 'None'}</span>
+          </>
+        ) : (
+          <span style={{ color: T.cloudMed }}>No primary deal found</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------- Main dashboard (post sign-in) ----------
+
+function Dashboard({ session, onSignOut }) {
+  const [data, setData] = useState(null)
+  const [tab, setTab] = useState('mine')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/data')
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Request failed (${res.status})`)
+      }
+      setData(await res.json())
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const mine = data?.mine || []
+  const unowned = data?.unowned || []
+  const active = tab === 'mine' ? mine : unowned
+
+  return (
+    <div style={styles.page}>
+      <header style={styles.header}>
+        <div>
+          <h1 style={{ ...styles.title, marginBottom: 2 }}>AE Missing Properties</h1>
+          <div style={{ color: T.cloudMed, fontSize: 13 }}>
+            {session.name} · {session.email}
+            {!session.ownerMatched && (
+              <span style={{ color: T.warningText }}> — no matching HubSpot owner found for this email</span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={styles.iconButton} onClick={load} title="Refresh">
+            <RefreshCw size={16} />
+          </button>
+          <button style={styles.iconButton} onClick={onSignOut} title="Sign out">
+            <LogOut size={16} />
+          </button>
+        </div>
+      </header>
+
+      <div style={styles.tabs}>
+        <button
+          style={{ ...styles.tab, ...(tab === 'mine' ? styles.tabActive : {}) }}
+          onClick={() => setTab('mine')}
+        >
+          <Users size={14} style={{ marginRight: 6 }} />
+          My List ({mine.length})
+        </button>
+        <button
+          style={{ ...styles.tab, ...(tab === 'unowned' ? styles.tabActive : {}) }}
+          onClick={() => setTab('unowned')}
+        >
+          <UserX size={14} style={{ marginRight: 6 }} />
+          Unowned ({unowned.length})
+        </button>
+      </div>
+
+      <main style={styles.main}>
+        {loading && <p style={{ color: T.cloudMed }}>Loading…</p>}
+        {error && (
+          <div style={{ ...styles.card, borderColor: T.criticalBorder, color: T.criticalText }}>
+            {error}
+          </div>
+        )}
+        {!loading && !error && active.length === 0 && (
+          <p style={{ color: T.cloudMed }}>
+            {tab === 'mine' ? 'No deals owned by you in this list right now.' : 'Nothing unowned right now.'}
+          </p>
+        )}
+        {!loading && !error && active.map((r) => (
+          <RecordCard key={r.contactId} record={r} showReasons={tab === 'unowned'} />
+        ))}
+      </main>
+
+      {data?.meta && (
+        <footer style={{ color: T.cloudMed, fontSize: 12, padding: '12px 24px' }}>
+          List {data.meta.listId} · {data.meta.totalInList} contacts · updated{' '}
+          {new Date(data.meta.fetchedAt).toLocaleString()}
+        </footer>
+      )}
+    </div>
+  )
+}
+
+// ---------- Root ----------
+
+export default function App() {
+  const [session, setSession] = useState(undefined) // undefined = checking, null = signed out
+  const [authError, setAuthError] = useState(null)
+
+  useEffect(() => {
+    fetch('/api/session')
+      .then((res) => (res.ok ? res.json() : null))
+      .then(setSession)
+      .catch(() => setSession(null))
+  }, [])
+
+  const handleCredential = useCallback(async (credential) => {
+    setAuthError(null)
+    try {
+      const res = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error || 'Sign-in failed')
+      setSession(body)
+    } catch (err) {
+      setAuthError(err.message)
+    }
+  }, [])
+
+  const handleSignOut = useCallback(async () => {
+    await fetch('/api/logout', { method: 'POST' })
+    setSession(null)
+  }, [])
+
+  if (session === undefined) {
+    return <div style={styles.centerScreen}><p style={{ color: T.cloudMed }}>Loading…</p></div>
+  }
+  if (!session) {
+    return <SignInScreen onCredential={handleCredential} error={authError} />
+  }
+  return <Dashboard session={session} onSignOut={handleSignOut} />
+}
+
+// ---------- Styles ----------
+
+const styles = {
+  page: { minHeight: '100vh', background: T.ivory, color: T.slate },
+  centerScreen: {
+    minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: T.ivory, color: T.slate,
+  },
+  signInCard: {
+    background: T.ivoryLight, border: `1px solid ${T.stone}`, borderRadius: 16,
+    padding: '40px 48px', textAlign: 'center', maxWidth: 420,
+  },
+  title: { fontSize: 22, fontWeight: 700, margin: 0 },
+  header: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '20px 24px', borderBottom: `1px solid ${T.stone}`,
+  },
+  iconButton: {
+    background: T.oat, border: `1px solid ${T.stone}`, color: T.slate,
+    borderRadius: 8, padding: 8, cursor: 'pointer', display: 'flex',
+  },
+  tabs: { display: 'flex', gap: 8, padding: '16px 24px 0' },
+  tab: {
+    display: 'flex', alignItems: 'center', background: 'transparent', border: 'none',
+    color: T.cloudDark, padding: '8px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 14,
+  },
+  tabActive: { background: T.manilla, color: T.clay, fontWeight: 600 },
+  main: { padding: 24, display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 900 },
+  card: {
+    background: T.ivoryLight, border: `1px solid ${T.stone}`, borderRadius: 12, padding: 16,
+  },
+  dealRow: { marginTop: 10, fontSize: 13 },
+  chip: {
+    display: 'inline-flex', alignItems: 'center', fontSize: 11.5,
+    background: T.criticalBg, border: `1px solid ${T.criticalBorder}`, color: T.criticalText,
+    borderRadius: 999, padding: '3px 8px',
+  },
+}
