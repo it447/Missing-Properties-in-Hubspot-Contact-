@@ -119,10 +119,31 @@ export default async function handler(req, res) {
       ].filter(Boolean),
     }))
 
+    // Grouped view: every contact with at least one missing property,
+    // bucketed by the AE responsible for it (the primary deal's owner,
+    // falling back to the contact's own owner if there's no deal). A
+    // contact with neither is skipped here — it has no AE to group under
+    // and already shows up in "unowned" above.
+    const byAEMap = new Map()
+    for (const r of records) {
+      if (r.missingContactProps.length === 0) continue
+      const ownerId = r.deal?.ownerId || r.contactOwnerId
+      if (isBlank(ownerId)) continue
+      const ownerName = (r.deal?.ownerId ? r.deal.ownerName : r.contactOwnerName) || `Owner ${ownerId}`
+      if (!byAEMap.has(ownerId)) {
+        byAEMap.set(ownerId, { ownerId, ownerName, records: [] })
+      }
+      byAEMap.get(ownerId).records.push(r)
+    }
+    const byAE = [...byAEMap.values()]
+      .sort((a, b) => a.ownerName.localeCompare(b.ownerName))
+      .map((g) => ({ ...g, records: g.records.sort((a, b) => a.name.localeCompare(b.name)) }))
+
     res.setHeader('Cache-Control', 'private, no-store')
     res.status(200).json({
       mine,
       unowned,
+      byAE,
       meta: { listId, totalInList: contacts.length, fetchedAt: new Date().toISOString() },
     })
   } catch (err) {

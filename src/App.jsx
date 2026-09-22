@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { RefreshCw, AlertTriangle, CheckCircle2, Users, UserX } from 'lucide-react'
 import { T } from './theme.js'
 
 // ============================================================
 // TESTING MODE — login is disabled for now.
 //
-// This file has NO Google sign-in: instead there's a "Viewing as" dropdown
-// (populated from /api/owners) that lets you pick any AE and see what
-// their My List / Unowned tabs would show, by passing ?ownerId=... to
-// /api/data.
+// This file has NO Google sign-in: the "By AE" tab groups every contact
+// with a missing property by the AE responsible for it (their primary
+// deal's owner, falling back to the contact's own owner), across all AEs
+// at once — no per-AE picker needed while login is off.
 //
 // To re-enable real login later:
 //   1. src/App.withLogin.jsx.bak has the original sign-in version of this
@@ -25,21 +25,6 @@ const PROP_LABELS = {
   sql: 'SQL',
   sal: 'SAL',
   initial_meeting_outcome: 'Initial Meeting Outcome',
-}
-
-function OwnerPicker({ owners, value, onChange }) {
-  return (
-    <select
-      value={value || ''}
-      onChange={(e) => onChange(e.target.value || null)}
-      style={styles.select}
-    >
-      <option value="">— Viewing as (pick an AE) —</option>
-      {owners.map((o) => (
-        <option key={o.id} value={o.id}>{o.name}</option>
-      ))}
-    </select>
-  )
 }
 
 function PropChip({ label }) {
@@ -99,27 +84,32 @@ function RecordCard({ record, showReasons }) {
   )
 }
 
+function AEGroup({ group }) {
+  return (
+    <section style={{ marginBottom: 24 }}>
+      <h2 style={styles.groupHeading}>
+        {group.ownerName} <span style={{ color: T.cloudMed, fontWeight: 400 }}>({group.records.length})</span>
+      </h2>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {group.records.map((r) => (
+          <RecordCard key={r.contactId} record={r} showReasons={false} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
 export default function App() {
-  const [owners, setOwners] = useState([])
-  const [viewAsOwnerId, setViewAsOwnerId] = useState(null)
   const [data, setData] = useState(null)
-  const [tab, setTab] = useState('mine')
+  const [tab, setTab] = useState('byAE')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-
-  useEffect(() => {
-    fetch('/api/owners')
-      .then((res) => (res.ok ? res.json() : { owners: [] }))
-      .then((body) => setOwners(body.owners || []))
-      .catch(() => setOwners([]))
-  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const qs = viewAsOwnerId ? `?ownerId=${encodeURIComponent(viewAsOwnerId)}` : ''
-      const res = await fetch(`/api/data${qs}`)
+      const res = await fetch('/api/data')
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error || `Request failed (${res.status})`)
@@ -130,25 +120,18 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [viewAsOwnerId])
+  }, [])
 
   useEffect(() => { load() }, [load])
 
-  const mine = data?.mine || []
+  const byAE = data?.byAE || []
   const unowned = data?.unowned || []
-  const active = tab === 'mine' ? mine : unowned
+  const totalMissing = byAE.reduce((sum, g) => sum + g.records.length, 0)
 
   return (
     <div style={styles.page}>
-      <div style={styles.testingBanner}>
-        Testing mode — login is disabled. Pick an AE below to preview their view.
-      </div>
-
       <header style={styles.header}>
-        <div>
-          <h1 style={{ ...styles.title, marginBottom: 8 }}>AE Missing Properties</h1>
-          <OwnerPicker owners={owners} value={viewAsOwnerId} onChange={setViewAsOwnerId} />
-        </div>
+        <h1 style={styles.title}>AE Missing Properties</h1>
         <button style={styles.iconButton} onClick={load} title="Refresh">
           <RefreshCw size={16} />
         </button>
@@ -156,11 +139,11 @@ export default function App() {
 
       <div style={styles.tabs}>
         <button
-          style={{ ...styles.tab, ...(tab === 'mine' ? styles.tabActive : {}) }}
-          onClick={() => setTab('mine')}
+          style={{ ...styles.tab, ...(tab === 'byAE' ? styles.tabActive : {}) }}
+          onClick={() => setTab('byAE')}
         >
           <Users size={14} style={{ marginRight: 6 }} />
-          My List ({mine.length})
+          By AE ({totalMissing})
         </button>
         <button
           style={{ ...styles.tab, ...(tab === 'unowned' ? styles.tabActive : {}) }}
@@ -172,23 +155,23 @@ export default function App() {
       </div>
 
       <main style={styles.main}>
-        {!viewAsOwnerId && tab === 'mine' && (
-          <p style={{ color: T.cloudMed }}>Pick an AE above to see their My List.</p>
-        )}
         {loading && <p style={{ color: T.cloudMed }}>Loading…</p>}
         {error && (
           <div style={{ ...styles.card, borderColor: T.criticalBorder, color: T.criticalText }}>
             {error}
           </div>
         )}
-        {!loading && !error && viewAsOwnerId !== null && active.length === 0 && tab === 'mine' && (
-          <p style={{ color: T.cloudMed }}>No deals owned by this AE in the list right now.</p>
+        {!loading && !error && tab === 'byAE' && byAE.length === 0 && (
+          <p style={{ color: T.cloudMed }}>No missing properties right now — every owned contact is complete.</p>
         )}
-        {!loading && !error && tab === 'unowned' && active.length === 0 && (
+        {!loading && !error && tab === 'byAE' && byAE.map((group) => (
+          <AEGroup key={group.ownerId} group={group} />
+        ))}
+        {!loading && !error && tab === 'unowned' && unowned.length === 0 && (
           <p style={{ color: T.cloudMed }}>Nothing unowned right now.</p>
         )}
-        {!loading && !error && active.map((r) => (
-          <RecordCard key={r.contactId} record={r} showReasons={tab === 'unowned'} />
+        {!loading && !error && tab === 'unowned' && unowned.map((r) => (
+          <RecordCard key={r.contactId} record={r} showReasons />
         ))}
       </main>
 
@@ -204,18 +187,10 @@ export default function App() {
 
 const styles = {
   page: { minHeight: '100vh', background: T.ivory, color: T.slate },
-  testingBanner: {
-    background: T.warningBg, borderBottom: `1px solid ${T.warningBorder}`, color: T.warningText,
-    fontSize: 13, padding: '8px 24px', textAlign: 'center',
-  },
   title: { fontSize: 22, fontWeight: 700, margin: 0 },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
     padding: '20px 24px', borderBottom: `1px solid ${T.stone}`,
-  },
-  select: {
-    background: T.oat, border: `1px solid ${T.stone}`, color: T.slate,
-    borderRadius: 8, padding: '8px 12px', fontSize: 14, minWidth: 240,
   },
   iconButton: {
     background: T.oat, border: `1px solid ${T.stone}`, color: T.slate,
@@ -227,7 +202,11 @@ const styles = {
     color: T.cloudDark, padding: '8px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 14,
   },
   tabActive: { background: T.manilla, color: T.clay, fontWeight: 600 },
-  main: { padding: 24, display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 900 },
+  main: { padding: 24, maxWidth: 900 },
+  groupHeading: {
+    fontSize: 15, fontWeight: 700, margin: '0 0 10px', paddingBottom: 8,
+    borderBottom: `1px solid ${T.stone}`,
+  },
   card: {
     background: T.ivoryLight, border: `1px solid ${T.stone}`, borderRadius: 12, padding: 16,
   },
