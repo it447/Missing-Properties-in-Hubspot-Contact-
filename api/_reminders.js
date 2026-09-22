@@ -19,7 +19,7 @@ const redis = new Redis({
 // explicitly clearing it) so stale keys don't accumulate forever.
 const TTL_SECONDS = 60 * 60 * 24 * 14
 
-function reminderKey(contactId, dealId) {
+export function reminderKey(contactId, dealId) {
   return `reminder:${contactId}:${dealId || 'none'}`
 }
 
@@ -55,4 +55,17 @@ export async function recordReminderSent(contactId, dealId, reminderNumber) {
 // instead of picking up where the old streak left off.
 export async function clearReminderState(contactId, dealId) {
   await redis.del(reminderKey(contactId, dealId))
+}
+
+// Every reminder key currently stored. Used by the daily job to find and
+// clear out contact+deal pairs that no longer appear in the live
+// missing-properties list (resolved, or the deal moved to an excluded
+// stage) — those otherwise wouldn't be visited again to get cleared, since
+// the job only iterates over what's *currently* missing.
+export async function listReminderKeys() {
+  return await redis.keys('reminder:*')
+}
+
+export async function clearReminderByKey(key) {
+  await redis.del(key)
 }
