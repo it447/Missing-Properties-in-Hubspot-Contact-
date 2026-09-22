@@ -13,7 +13,9 @@
 //          primary deal but that deal has no owner, OR has no primary deal
 //          at all (surfaced too — a contact with no deal isn't something
 //          this endpoint should silently drop, since that's exactly the
-//          kind of data gap an AE should be able to see and fix).
+//          kind of data gap an AE should be able to see and fix). Excludes
+//          deals already at "Meeting Scheduled" in the "MRR Placement"
+//          pipeline — that's a known-fine state, not a gap to chase.
 // TESTING MODE: getSession/login is bypassed below (see the block marked
 // "RE-ENABLE LOGIN HERE"). "Mine" is instead driven by an ?ownerId=
 // query param so you can test the My List / Unowned split by picking any
@@ -26,7 +28,15 @@ import {
   batchReadContacts,
   batchReadDeals,
   getPrimaryDealIdsForContacts,
+  getDealStageLabels,
 } from './_hubspot.js'
+
+// Deals sitting in this stage (within this pipeline) are excluded from
+// "Unowned" — a deal that's reached Meeting Scheduled in the MRR
+// Placement pipeline isn't a data gap, even if it happens to have no
+// owner yet.
+const EXCLUDED_UNOWNED_PIPELINE_RE = /\bmrr placement\b/i
+const EXCLUDED_UNOWNED_STAGE_RE = /\bmeeting scheduled\b/i
 
 // Only contact properties per the confirmed scope — these are NOT deal
 // properties in this portal.
@@ -69,7 +79,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    const [owners, contactIds] = await Promise.all([getAllOwners(), getListContactIds(listId)])
+    const [owners, contactIds, stageLabels] = await Promise.all([
+      getAllOwners(),
+      getListContactIds(listId),
+      getDealStageLabels(),
+    ])
 
     const contacts = await batchReadContacts(contactIds, CONTACT_PROPS)
     const primaryDealIds = await getPrimaryDealIdsForContacts(contactIds)
@@ -87,6 +101,12 @@ export default async function handler(req, res) {
       const missingContactProps = TRACKED_CONTACT_PROPS.filter((key) => isBlank(p[key]))
       const contactOwnerId = p.hubspot_owner_id || null
       const dealOwnerId = deal ? (dp.hubspot_owner_id || null) : null
+      const stageInfo = deal ? stageLabels.get(dp.dealstage) : null
+      const inExcludedUnownedStage = Boolean(
+        stageInfo &&
+        EXCLUDED_UNOWNED_PIPELINE_RE.test(stageInfo.pipelineLabel || '') &&
+        EXCLUDED_UNOWNED_STAGE_RE.test(stageInfo.stageLabel || '')
+      )
 
       return {
         contactId: c.id,
@@ -96,11 +116,13 @@ export default async function handler(req, res) {
         contactOwnerId,
         contactOwnerName: ownerLabel(owners, contactOwnerId),
         missingContactProps,
+        inExcludedUnownedStage,
         deal: deal
           ? {
               dealId: deal.id,
               name: dp.dealname || `Deal ${deal.id}`,
-              stage: dp.dealstage || null,
+              stage: stageInfo?.stageLabel || dp.dealstage || null,
+              pipeline: stageInfo?.pipelineLabel || null,
               hubspotUrl: dealUrl(deal.id),
               ownerId: dealOwnerId,
               ownerName: ownerLabel(owners, dealOwnerId),
@@ -110,23 +132,29 @@ export default async function handler(req, res) {
       }
     })
 
+    const cleanRecords = records.map(({ inExcludedUnownedStage, ...rest }) => rest)
+
     const mine = viewerOwnerId
-      ? records.filter((r) => r.deal && r.deal.ownerId === viewerOwnerId)
+      ? cleanRecords.filter((r) => r.deal && r.deal.ownerId === viewerOwnerId)
       : []
 
     const unowned = records.filter((r) => {
+      if (r.inExcludedUnownedStage) return false
       const contactOwnerMissing = isBlank(r.contactOwnerId)
       const noDeal = !r.deal
       const dealOwnerMissing = r.deal && r.deal.ownerMissing
       return contactOwnerMissing || noDeal || dealOwnerMissing
-    }).map((r) => ({
-      ...r,
-      reasons: [
-        isBlank(r.contactOwnerId) && 'Contact has no owner',
-        !r.deal && 'No primary deal found',
-        r.deal && r.deal.ownerMissing && 'Primary deal has no owner',
-      ].filter(Boolean),
-    }))
+    }).map((r) => {
+      const { inExcludedUnownedStage, ...rest } = r
+      return {
+        ...rest,
+        reasons: [
+          isBlank(r.contactOwnerId) && 'Contact has no owner',
+          !r.deal && 'No primary deal found',
+          r.deal && r.deal.ownerMissing && 'Primary deal has no owner',
+        ].filter(Boolean),
+      }
+    })
 
     // Grouped view: every contact with at least one missing property,
     // bucketed by the AE responsible for it (the primary deal's owner,
@@ -134,7 +162,7 @@ export default async function handler(req, res) {
     // contact with neither is skipped here — it has no AE to group under
     // and already shows up in "unowned" above.
     const byAEMap = new Map()
-    for (const r of records) {
+    for (const r of cleanRecords) {
       if (r.missingContactProps.length === 0) continue
       const ownerId = r.deal?.ownerId || r.contactOwnerId
       if (isBlank(ownerId)) continue
