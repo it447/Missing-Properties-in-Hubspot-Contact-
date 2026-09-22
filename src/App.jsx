@@ -45,27 +45,33 @@ function ReasonChip({ label }) {
   )
 }
 
-function RecordCard({ record, showReasons }) {
+function RecordCard({ record, showReasons, primaryLink = 'contact' }) {
   const hasIssues = record.missingContactProps.length > 0 || (showReasons && record.reasons?.length > 0)
 
-  const openContact = () => {
-    if (record.hubspotUrl) window.open(record.hubspotUrl, '_blank', 'noopener,noreferrer')
+  // "Unowned" is largely a deal-ownership problem, so its cards should open
+  // the deal, not the contact — falling back to the contact when there's no
+  // primary deal to link to at all.
+  const cardUrl = primaryLink === 'deal' ? (record.deal?.hubspotUrl || record.hubspotUrl) : record.hubspotUrl
+  const cardUrlIsDeal = primaryLink === 'deal' && Boolean(record.deal?.hubspotUrl)
+
+  const openCard = () => {
+    if (cardUrl) window.open(cardUrl, '_blank', 'noopener,noreferrer')
   }
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
-      openContact()
+      openCard()
     }
   }
 
   return (
     <div
-      style={{ ...styles.card, ...(record.hubspotUrl ? styles.cardClickable : {}) }}
-      onClick={record.hubspotUrl ? openContact : undefined}
-      role={record.hubspotUrl ? 'link' : undefined}
-      tabIndex={record.hubspotUrl ? 0 : undefined}
-      onKeyDown={record.hubspotUrl ? handleKeyDown : undefined}
-      title={record.hubspotUrl ? 'Open contact in HubSpot' : undefined}
+      style={{ ...styles.card, ...(cardUrl ? styles.cardClickable : {}) }}
+      onClick={cardUrl ? openCard : undefined}
+      role={cardUrl ? 'link' : undefined}
+      tabIndex={cardUrl ? 0 : undefined}
+      onKeyDown={cardUrl ? handleKeyDown : undefined}
+      title={cardUrl ? `Open ${cardUrlIsDeal ? 'deal' : 'contact'} in HubSpot` : undefined}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
@@ -201,7 +207,7 @@ export default function App() {
           <p style={{ color: T.cloudMed }}>Nothing unowned right now.</p>
         )}
         {!loading && !error && tab === 'unowned' && unowned.map((r) => (
-          <RecordCard key={r.contactId} record={r} showReasons />
+          <RecordCard key={r.contactId} record={r} showReasons primaryLink="deal" />
         ))}
       </main>
 
