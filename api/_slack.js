@@ -3,16 +3,24 @@
 // pattern as HUBSPOT_TOKEN in _hubspot.js.
 const SLACK_BASE = 'https://slack.com/api'
 
-async function slackFetch(method, body) {
+async function slackFetch(method, params = {}) {
   const token = process.env.SLACK_BOT_TOKEN
   if (!token) throw new Error('Missing SLACK_BOT_TOKEN env var')
+  // Form-encoded, not JSON — some Slack Web API methods (users.lookupByEmail
+  // among them) reject a JSON body with "invalid_arguments" even though the
+  // params are correct. Form-encoding is the one format every method
+  // reliably accepts.
+  const body = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) body.append(key, String(value))
+  }
   const res = await fetch(`${SLACK_BASE}/${method}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: JSON.stringify(body),
+    body: body.toString(),
   })
   const data = await res.json()
   // Slack's API always returns HTTP 200 — success/failure is in the body.
