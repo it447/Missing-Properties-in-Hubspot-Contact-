@@ -11,6 +11,12 @@
 // deal specifically has no owner gets a flat daily alert tagging Elena
 // (see _slackTemplates.js's buildUnownedDealMessage — this one has no
 // escalation tiers).
+//
+// Query params (for manual testing, e.g. ?force=true&limit=1):
+//   force=true  bypasses the 9am-Eastern gate so it runs immediately
+//   limit=N     caps this run to at most N AE reminders and N unowned
+//               alerts (not N total), so a test doesn't message every
+//               contact at once. Omit for unlimited (the real daily run).
 import { getMissingPropertiesData } from '../_missingProperties.js'
 import { lookupSlackUserIdByEmail, postSlackMessage } from '../_slack.js'
 import {
@@ -47,11 +53,19 @@ export default async function handler(req, res) {
     }
   }
 
-  const force = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams.get('force') === 'true'
+  const params = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams
+  const force = params.get('force') === 'true'
   if (!force && !isNineAmEastern()) {
     res.status(200).json({ skipped: true, reason: 'Not 9am America/New_York' })
     return
   }
+
+  // Caps how many AE reminders and how many unowned-deal alerts get sent
+  // this run — for manually testing against real Slack/HubSpot data
+  // without messaging every contact at once. Ignored (unlimited) unless
+  // explicitly passed.
+  const limitParam = params.get('limit')
+  const limit = limitParam ? Number(limitParam) : Infinity
 
   const listId = process.env.HUBSPOT_LIST_ID
   const channel = process.env.SLACK_CHANNEL
@@ -86,6 +100,8 @@ export default async function handler(req, res) {
         const dealId = record.deal?.dealId || null
         activeKeys.add(reminderKey(record.contactId, dealId))
 
+        if (summary.aeReminders >= limit) continue
+
         const state = await getReminderState(record.contactId, dealId)
         if (state.count >= MAX_REMINDERS) continue
         if (!shouldSendReminderToday(state)) continue
@@ -115,6 +131,7 @@ export default async function handler(req, res) {
 
     for (const record of unowned) {
       if (!record.deal || !record.deal.ownerMissing) continue
+      if (summary.unownedAlerts >= limit) continue
       const message = buildUnownedDealMessage({
         elenaSlackId,
         contactName: record.name,
