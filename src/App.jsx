@@ -47,8 +47,26 @@ function ReasonChip({ label }) {
 
 function RecordCard({ record, showReasons }) {
   const hasIssues = record.missingContactProps.length > 0 || (showReasons && record.reasons?.length > 0)
+
+  const openContact = () => {
+    if (record.hubspotUrl) window.open(record.hubspotUrl, '_blank', 'noopener,noreferrer')
+  }
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      openContact()
+    }
+  }
+
   return (
-    <div style={styles.card}>
+    <div
+      style={{ ...styles.card, ...(record.hubspotUrl ? styles.cardClickable : {}) }}
+      onClick={record.hubspotUrl ? openContact : undefined}
+      role={record.hubspotUrl ? 'link' : undefined}
+      tabIndex={record.hubspotUrl ? 0 : undefined}
+      onKeyDown={record.hubspotUrl ? handleKeyDown : undefined}
+      title={record.hubspotUrl ? 'Open contact in HubSpot' : undefined}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
           <div style={{ fontWeight: 600, fontSize: 15 }}>{record.name}</div>
@@ -72,7 +90,19 @@ function RecordCard({ record, showReasons }) {
         {record.deal ? (
           <>
             <span style={{ color: T.cloudDark }}>Deal:</span>{' '}
-            <span style={{ fontWeight: 500 }}>{record.deal.name}</span>
+            {record.deal.hubspotUrl ? (
+              <a
+                href={record.deal.hubspotUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                style={styles.dealLink}
+              >
+                {record.deal.name}
+              </a>
+            ) : (
+              <span style={{ fontWeight: 500 }}>{record.deal.name}</span>
+            )}
             {record.deal.stage && <span style={{ color: T.cloudMed }}> · {record.deal.stage}</span>}
             <span style={{ color: T.cloudMed }}> · Owner: {record.deal.ownerName || 'None'}</span>
           </>
@@ -210,7 +240,9 @@ const styles = {
   card: {
     background: T.ivoryLight, border: `1px solid ${T.stone}`, borderRadius: 12, padding: 16,
   },
+  cardClickable: { cursor: 'pointer' },
   dealRow: { marginTop: 10, fontSize: 13 },
+  dealLink: { fontWeight: 500, color: T.slate, textDecoration: 'underline', textDecorationColor: T.stone },
   chip: {
     display: 'inline-flex', alignItems: 'center', fontSize: 11.5,
     background: T.criticalBg, border: `1px solid ${T.criticalBorder}`, color: T.criticalText,

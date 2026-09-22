@@ -38,6 +38,13 @@ function isBlank(v) {
   return v === null || v === undefined || String(v).trim() === ''
 }
 
+// HubSpot record URLs need the portal (hub) ID — the number in HubSpot's
+// own URLs, e.g. app.hubspot.com/contacts/<portalId>/... . Links are
+// simply omitted if it's not set.
+const portalId = process.env.HUBSPOT_PORTAL_ID
+const contactUrl = (id) => (portalId ? `https://app.hubspot.com/contacts/${portalId}/record/0-1/${id}` : null)
+const dealUrl = (id) => (portalId ? `https://app.hubspot.com/contacts/${portalId}/record/0-3/${id}` : null)
+
 export default async function handler(req, res) {
   // ---- RE-ENABLE LOGIN HERE ----
   // Swap this block back to the real session check when you're ready:
@@ -85,6 +92,7 @@ export default async function handler(req, res) {
         contactId: c.id,
         name: [p.firstname, p.lastname].filter(Boolean).join(' ') || p.email || `Contact ${c.id}`,
         email: p.email || null,
+        hubspotUrl: contactUrl(c.id),
         contactOwnerId,
         contactOwnerName: ownerLabel(owners, contactOwnerId),
         missingContactProps,
@@ -93,6 +101,7 @@ export default async function handler(req, res) {
               dealId: deal.id,
               name: dp.dealname || `Deal ${deal.id}`,
               stage: dp.dealstage || null,
+              hubspotUrl: dealUrl(deal.id),
               ownerId: dealOwnerId,
               ownerName: ownerLabel(owners, dealOwnerId),
               ownerMissing: isBlank(dealOwnerId),
@@ -144,7 +153,7 @@ export default async function handler(req, res) {
       mine,
       unowned,
       byAE,
-      meta: { listId, totalInList: contacts.length, fetchedAt: new Date().toISOString() },
+      meta: { listId, totalInList: contacts.length, fetchedAt: new Date().toISOString(), hasHubspotLinks: Boolean(portalId) },
     })
   } catch (err) {
     console.error('api/data failed:', err)
