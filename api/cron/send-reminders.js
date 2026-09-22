@@ -163,6 +163,9 @@ export default async function handler(req, res) {
     res.status(200).json({ ok: true, ...summary })
   } catch (err) {
     console.error('cron/send-reminders failed:', err)
-    res.status(502).json({ error: 'Failed to run reminder job' })
+    // Included in the response (not just server logs) to make manual
+    // testing faster — this endpoint requires CRON_SECRET once that's
+    // set, so it's not exposing internals to the public.
+    res.status(502).json({ error: 'Failed to run reminder job', detail: err.message, slackError: err.slackError })
   }
 }
