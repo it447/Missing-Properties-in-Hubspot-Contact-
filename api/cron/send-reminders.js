@@ -1,22 +1,23 @@
-// Daily Slack reminder job. Scheduled via vercel.json's `crons` at both
-// 13:00 and 14:00 UTC (covering 9am Eastern under both EDT and EST —
-// Vercel Cron has no timezone/DST awareness, so instead of picking one
-// UTC time and letting it drift an hour twice a year, this runs twice a
-// day and the check below only actually does anything on the invocation
-// where it's really 9am America/New_York. Self-correcting, no maintenance.
+// Slack reminder job, Monday-Friday only, spaced across three time slots
+// instead of firing all at once:
+//   9:00am ET  -> reminder 1
+//   9:30am ET  -> reminder 2
+//   10:00am ET -> reminder 3 (final, escalates to Dijah + Elena)
+// The "Unowned" deal-has-no-owner alert to Elena rides the 9:00am slot.
 //
-// Each still-missing contact+deal gets reminder 1/2/3 (tracked in Redis,
-// see _reminders.js) via the "By AE" flow, tagging the AE (plus Dijah and
-// Elena on reminder 3). Separately, every "Unowned" contact whose primary
-// deal specifically has no owner gets a flat daily alert tagging Elena
-// (see _slackTemplates.js's buildUnownedDealMessage — this one has no
-// escalation tiers).
+// Scheduled via vercel.json's `crons` at every UTC time that could
+// correspond to one of these three ET slots under EDT or EST (Vercel Cron
+// has no timezone/DST awareness). Some entries only do real work for half
+// the year and no-op the other half — see reminderTierForNow() below,
+// which is what actually decides whether/what to send on each invocation,
+// self-correcting across DST with no manual maintenance.
 //
-// Query params (for manual testing, e.g. ?force=true&limit=1):
-//   force=true  bypasses the 9am-Eastern gate so it runs immediately
+// Query params (for manual testing, e.g. ?force=true&tier=1&limit=1):
+//   force=true  bypasses the weekday + time-slot gate
+//   tier=1|2|3  which reminder tier to run when forced (default 1)
 //   limit=N     caps this run to at most N AE reminders and N unowned
 //               alerts (not N total), so a test doesn't message every
-//               contact at once. Omit for unlimited (the real daily run).
+//               contact at once. Omit for unlimited (the real run).
 import { getMissingPropertiesData } from '../_missingProperties.js'
 import { lookupSlackUserIdByEmail, postSlackMessage } from '../_slack.js'
 import {
@@ -33,13 +34,40 @@ const ESCALATION_EMAILS = ['dijah@scalearmy.com', 'elena@scalearmy.com']
 const ELENA_EMAIL = 'elena@scalearmy.com'
 const MAX_REMINDERS = 3
 
-function isNineAmEastern() {
-  const hour = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hour: 'numeric',
-    hour12: false,
-  }).format(new Date())
-  return Number(hour) === 9
+// Minutes-since-midnight for each reminder tier's Eastern time slot, and
+// how many minutes of drift either side still counts as "that slot" (a
+// cron invocation can fire a few minutes late).
+const TIER_SLOTS = { 1: 9 * 60, 2: 9 * 60 + 30, 3: 10 * 60 }
+const SLOT_TOLERANCE_MINUTES = 10
+
+function getEasternNow() {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      weekday: 'short',
+      hour: 'numeric',
+      minute: 'numeric',
+      hourCycle: 'h23',
+    })
+      .formatToParts(new Date())
+      .map((p) => [p.type, p.value])
+  )
+  return { weekday: parts.weekday, hour: Number(parts.hour), minute: Number(parts.minute) }
+}
+
+function isWeekday({ weekday }) {
+  return weekday !== 'Sat' && weekday !== 'Sun'
+}
+
+// Returns 1, 2, or 3 if the current Eastern time falls within that tier's
+// slot (+/- tolerance), else null — meaning this invocation has nothing
+// to do (it's one of the "other season" UTC firings, or just off-schedule).
+function reminderTierForNow({ hour, minute }) {
+  const nowMinutes = hour * 60 + minute
+  for (const [tier, slotMinutes] of Object.entries(TIER_SLOTS)) {
+    if (Math.abs(nowMinutes - slotMinutes) <= SLOT_TOLERANCE_MINUTES) return Number(tier)
+  }
+  return null
 }
 
 export default async function handler(req, res) {
@@ -55,9 +83,21 @@ export default async function handler(req, res) {
 
   const params = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams
   const force = params.get('force') === 'true'
-  if (!force && !isNineAmEastern()) {
-    res.status(200).json({ skipped: true, reason: 'Not 9am America/New_York' })
-    return
+
+  let tier
+  if (force) {
+    tier = params.get('tier') ? Number(params.get('tier')) : 1
+  } else {
+    const easternNow = getEasternNow()
+    if (!isWeekday(easternNow)) {
+      res.status(200).json({ skipped: true, reason: 'Weekend' })
+      return
+    }
+    tier = reminderTierForNow(easternNow)
+    if (!tier) {
+      res.status(200).json({ skipped: true, reason: 'Not a reminder time slot' })
+      return
+    }
   }
 
   // Caps how many AE reminders and how many unowned-deal alerts get sent
@@ -84,18 +124,16 @@ export default async function handler(req, res) {
     return id
   }
 
-  const summary = { aeReminders: 0, unownedAlerts: 0, cleared: 0, errors: 0 }
+  const summary = { tier, aeReminders: 0, unownedAlerts: 0, cleared: 0, errors: 0 }
 
   try {
     const { byAE, unowned, owners } = await getMissingPropertiesData({ listId })
     const emailByOwnerId = new Map(owners.map((o) => [String(o.id), o.email]))
-    const escalationSlackIds = (await Promise.all(ESCALATION_EMAILS.map(resolveSlackId))).filter(Boolean)
-    const elenaSlackId = await resolveSlackId(ELENA_EMAIL)
 
     const activeKeys = new Set()
 
     for (const group of byAE) {
-      const aeSlackId = await resolveSlackId(emailByOwnerId.get(String(group.ownerId)))
+      let aeSlackId
       for (const record of group.records) {
         const dealId = record.deal?.dealId || null
         activeKeys.add(reminderKey(record.contactId, dealId))
@@ -104,13 +142,25 @@ export default async function handler(req, res) {
 
         const state = await getReminderState(record.contactId, dealId)
         if (state.count >= MAX_REMINDERS) continue
-        if (!shouldSendReminderToday(state)) continue
 
         const reminderNumber = state.count + 1
+        // This tier's slot only sends reminders whose number matches it —
+        // that's what actually spaces 1/2/3 across the day instead of a
+        // contact getting all applicable reminders in one run.
+        if (reminderNumber !== tier) continue
+        if (!shouldSendReminderToday(state)) continue
+
+        if (aeSlackId === undefined) aeSlackId = await resolveSlackId(emailByOwnerId.get(String(group.ownerId)))
+
+        let escalationSlackIds = []
+        if (reminderNumber === MAX_REMINDERS) {
+          escalationSlackIds = (await Promise.all(ESCALATION_EMAILS.map(resolveSlackId))).filter(Boolean)
+        }
+
         const message = buildReminderMessage({
           reminderNumber,
           aeSlackId,
-          escalationSlackIds: reminderNumber === MAX_REMINDERS ? escalationSlackIds : [],
+          escalationSlackIds,
           contactName: record.name,
           contactUrl: record.hubspotUrl,
           dealName: record.deal?.name || null,
@@ -129,22 +179,27 @@ export default async function handler(req, res) {
       }
     }
 
-    for (const record of unowned) {
-      if (!record.deal || !record.deal.ownerMissing) continue
-      if (summary.unownedAlerts >= limit) continue
-      const message = buildUnownedDealMessage({
-        elenaSlackId,
-        contactName: record.name,
-        contactUrl: record.hubspotUrl,
-        dealName: record.deal.name,
-        dealUrl: record.deal.hubspotUrl,
-      })
-      try {
-        await postSlackMessage(channel, message)
-        summary.unownedAlerts += 1
-      } catch (err) {
-        console.error(`Failed to send unowned-deal alert for contact ${record.contactId}:`, err)
-        summary.errors += 1
+    // The Unowned deal-has-no-owner alert has no tiers — it's a single
+    // flat daily message, so it only rides the first (9am) slot.
+    if (tier === 1) {
+      const elenaSlackId = await resolveSlackId(ELENA_EMAIL)
+      for (const record of unowned) {
+        if (!record.deal || !record.deal.ownerMissing) continue
+        if (summary.unownedAlerts >= limit) continue
+        const message = buildUnownedDealMessage({
+          elenaSlackId,
+          contactName: record.name,
+          contactUrl: record.hubspotUrl,
+          dealName: record.deal.name,
+          dealUrl: record.deal.hubspotUrl,
+        })
+        try {
+          await postSlackMessage(channel, message)
+          summary.unownedAlerts += 1
+        } catch (err) {
+          console.error(`Failed to send unowned-deal alert for contact ${record.contactId}:`, err)
+          summary.errors += 1
+        }
       }
     }
 
